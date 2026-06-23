@@ -41,7 +41,7 @@ async def home():
         "usage": "/api/insta?url=INSTAGRAM_URL"
     }
 
-@app.get("/api/insta")
+@app.get("/insta")
 async def download_instagram(url: str = Query(..., description="Instagram URL")):
     # Validate Instagram URL
     if 'instagram.com' not in url:
