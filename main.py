@@ -1,133 +1,97 @@
-# api/insta.py (Vercel Python serverless function)
-
 import os
 import json
 import requests
-from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-class handler(BaseHTTPRequestHandler):
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
-    def do_GET(self):
-        # CORS headers
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-
-        # Parse URL parameters
-        parsed_url = urlparse(self.path)
-        params = parse_qs(parsed_url.query)
+@app.route('/api/insta', methods=['GET', 'OPTIONS'])
+def download_instagram():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'}), 200
+    
+    # Get URL parameter
+    url = request.args.get('url')
+    
+    if not url:
+        return jsonify({'error': 'Missing url parameter'}), 400
+    
+    # Validate Instagram URL
+    if 'instagram.com' not in url:
+        return jsonify({'error': 'Only Instagram URLs are supported'}), 400
+    
+    APIFY_TOKEN = os.environ.get('APIFY_TOKEN', 'apify_api_qt1Mqt4thz8KaXh0uQBkquhGNdUYPB0acxhY')
+    
+    if not APIFY_TOKEN:
+        return jsonify({'error': 'APIFY_TOKEN not configured'}), 500
+    
+    try:
+        # Call Apify API
+        apify_response = requests.post(
+            'https://api.apify.com/v2/acts/elis~instagram-downloader-api/runs?waitForFinish=120',
+            headers={
+                'Authorization': f'Bearer {APIFY_TOKEN}',
+                'Content-Type': 'application/json'
+            },
+            json={'url': [url]},
+            timeout=130
+        )
         
-        # Check if path is /api/insta
-        if parsed_url.path != '/api/insta':
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Not found'}).encode())
-            return
-
-        # Get URL parameter
-        url = params.get('url', [None])[0]
+        if apify_response.status_code != 200:
+            return jsonify({
+                'error': 'Apify API error',
+                'details': apify_response.text
+            }), apify_response.status_code
         
-        if not url:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Missing url parameter'}).encode())
-            return
-
-        # Validate Instagram URL
-        if 'instagram.com' not in url:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Only Instagram URLs are supported'}).encode())
-            return
-
-        # Use environment variable (better practice)
-        APIFY_TOKEN = os.environ.get('APIFY_TOKEN', 'apify_api_qt1Mqt4thz8KaXh0uQBkquhGNdUYPB0acxhY')
+        data = apify_response.json()
         
-        if not APIFY_TOKEN:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'APIFY_TOKEN not configured'}).encode())
-            return
-
-        try:
-            # Call Apify API
-            apify_response = requests.post(
-                'https://api.apify.com/v2/acts/elis~instagram-downloader-api/runs?waitForFinish=120',
-                headers={
-                    'Authorization': f'Bearer {APIFY_TOKEN}',
-                    'Content-Type': 'application/json'
-                },
-                json={
-                    'url': [url]
-                },
-                timeout=130
+        # Extract dataset ID and fetch results
+        dataset_id = data.get('data', {}).get('defaultDatasetId')
+        results = []
+        
+        if dataset_id:
+            dataset_response = requests.get(
+                f'https://api.apify.com/v2/datasets/{dataset_id}/items',
+                headers={'Authorization': f'Bearer {APIFY_TOKEN}'},
+                timeout=30
             )
-
-            if apify_response.status_code != 200:
-                self.send_response(apify_response.status_code)
-                self.end_headers()
-                self.wfile.write(json.dumps({
-                    'error': 'Apify API error',
-                    'details': apify_response.text
-                }).encode())
-                return
-
-            data = apify_response.json()
             
-            # Extract dataset ID and fetch results
-            dataset_id = data.get('data', {}).get('defaultDatasetId')
-            results = []
-            
-            if dataset_id:
-                dataset_response = requests.get(
-                    f'https://api.apify.com/v2/datasets/{dataset_id}/items',
-                    headers={
-                        'Authorization': f'Bearer {APIFY_TOKEN}'
-                    },
-                    timeout=30
-                )
-                
-                if dataset_response.status_code == 200:
-                    results = dataset_response.json()
-            else:
-                # Direct results from run
-                results = data.get('data', {}).get('datasetItems', [])
-
-            # Format response
-            formatted_results = []
-            for item in results:
-                formatted_results.append({
-                    'inputUrl': item.get('inputUrl', url),
-                    'platform': item.get('platform', 'instagram'),
-                    'result': item.get('result', item.get('media', []))
-                })
-
-            response_data = {
-                'success': True,
-                'url': url,
-                'data': formatted_results
-            }
-
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(json.dumps(response_data).encode())
-
-        except requests.exceptions.Timeout:
-            self.send_response(504)
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Request timeout'}).encode())
+            if dataset_response.status_code == 200:
+                results = dataset_response.json()
+        else:
+            results = data.get('data', {}).get('datasetItems', [])
         
-        except Exception as e:
-            self.send_response(500)
-            self.end_headers()
-            self.wfile.write(json.dumps({
-                'error': 'Internal server error',
-                'message': str(e)
-            }).encode())
+        # Format response
+        formatted_results = []
+        for item in results:
+            formatted_results.append({
+                'inputUrl': item.get('inputUrl', url),
+                'platform': item.get('platform', 'instagram'),
+                'result': item.get('result', item.get('media', []))
+            })
+        
+        return jsonify({
+            'success': True,
+            'url': url,
+            'data': formatted_results
+        })
+        
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Request timeout'}), 504
+    except Exception as e:
+        return jsonify({
+            'error': 'Internal server error',
+            'message': str(e)
+        }), 500
+
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({
+        'message': 'Instagram Downloader API',
+        'usage': '/api/insta?url=INSTAGRAM_URL'
+    })
+
+# For Vercel serverless
+app = app
